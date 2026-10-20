@@ -1,0 +1,19 @@
+{
+  "name": "primestar-hrms",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@primestar/web",
+    "build": "npm run build --workspace=@primestar/web",
+    "lint": "npm run lint --workspace=@primestar/web"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.0"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
+  }
+}

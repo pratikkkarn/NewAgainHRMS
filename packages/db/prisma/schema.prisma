@@ -1,0 +1,758 @@
+// Prime Star HRMS: Phase 1 data model (PO management, auth, audit, files, basic employees).
+// Source: Architecture doc, sections 6, 7 and 12. Phase 2/3 models are added in later migrations.
+//
+// Conventions
+// - Every table has a UUID id, createdAt, updatedAt and createdById.
+// - Money is Decimal(14,2). Rates are Decimal(5,2). Business dates are @db.Date (India time).
+// - Records with history are never hard-deleted: they are closed, cancelled or archived.
+// - Enum values mirror packages/shared/src/enums.ts. Keep them in sync.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  LOCKED
+  DISABLED
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+}
+
+enum SowStatus {
+  ACTIVE
+  EXPIRED
+  SUPERSEDED
+}
+
+enum QuoteStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum PoStatus {
+  ACTIVE
+  RENEWED
+  EXHAUSTED
+  EXPIRED
+  CLOSED
+}
+
+enum GstType {
+  IGST
+  CGST_SGST
+}
+
+enum AmendmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum InvoiceType {
+  INVOICE
+  CREDIT_NOTE
+}
+
+/// PAID is kept small on purpose: a status and a date, no part payments.
+/// Only an ISSUED invoice can become PAID. A paid invoice can't be cancelled; issue a credit note instead.
+enum InvoiceStatus {
+  ISSUED
+  PAID
+  CANCELLED
+}
+
+enum MilestoneStatus {
+  PENDING
+  INVOICED
+  CANCELLED
+}
+
+enum ProformaStatus {
+  DRAFT
+  SENT
+  APPROVED
+  INVOICED
+  CANCELLED
+}
+
+enum BillableDaysMethod {
+  CALENDAR
+  WORKING_DAYS
+  MANUAL
+}
+
+enum EmployeeStatus {
+  CANDIDATE
+  ACTIVE
+  RESIGNED
+}
+
+enum PipelineStage {
+  YET_TO_JOIN
+  WILL_JOIN
+  JOINED
+  DROPPED
+  DECLINED
+}
+
+enum SensitiveIdKind {
+  PAN
+  AADHAAR
+}
+
+enum DocumentType {
+  SOW
+  PO
+  QUOTATION
+  TAX_INVOICE
+  CREDIT_NOTE
+  CANDIDATE_HR
+  OTHER
+}
+
+/// "Expired" is worked out from expiryDate, not stored.
+enum DocumentStatus {
+  ACTIVE
+  VERIFIED
+  ARCHIVED
+}
+
+enum EmailStatus {
+  QUEUED
+  SENT
+  FAILED
+  SKIPPED
+}
+
+/// Each series has its own gap-free numbering per financial year (a GST rule).
+enum NumberSeries {
+  INVOICE
+  CREDIT_NOTE
+  PROFORMA
+}
+
+enum FileScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+}
+
+// ─── Auth, users and roles ───────────────────────────────────────────────────
+
+model User {
+  id                 String         @id @default(uuid(7)) @db.Uuid
+  /// Login is by email. Emails are stored lowercase (a CHECK constraint in the migration enforces it).
+  username           String?        @unique
+  name               String
+  email              String         @unique
+  passwordHash       String? // argon2id; null until the user sets a password via a one-time link
+  status             UserStatus     @default(INVITED)
+  failedLoginCount   Int            @default(0)
+  lockedUntil        DateTime?
+  lastLoginAt        DateTime?
+  mustChangePassword Boolean        @default(false)
+  /// One-time links, stored as SHA-256 hashes. Issuing a new one replaces the old one.
+  inviteTokenHash    String?        @unique
+  inviteExpiresAt    DateTime?
+  resetTokenHash     String?        @unique
+  resetExpiresAt     DateTime?
+  employeeId         String?        @unique @db.Uuid
+  employee           Employee?      @relation(fields: [employeeId], references: [id])
+  roles              UserRole[]
+  sessions           Session[]
+  notifications      Notification[]
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  createdById        String?        @db.Uuid
+}
+
+/// Roles are data: a named set of permission strings such as "po.edit".
+model Role {
+  id          String     @id @default(uuid(7)) @db.Uuid
+  key         String     @unique
+  name        String
+  description String?
+  permissions String[]
+  isSystem    Boolean    @default(false)
+  /// A locked role's permissions can't be edited (the CEO role).
+  isLocked    Boolean    @default(false)
+  users       UserRole[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  createdById String?    @db.Uuid
+}
+
+model UserRole {
+  userId       String   @db.Uuid
+  roleId       String   @db.Uuid
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role         Role     @relation(fields: [roleId], references: [id])
+  assignedAt   DateTime @default(now())
+  assignedById String?  @db.Uuid
+
+  @@id([userId, roleId])
+}
+
+/// One row per refresh token. Tokens rotate on every use and are revoked on logout or role change.
+model Session {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  userId           String    @db.Uuid
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokenHash String    @unique
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  replacedById     String?   @db.Uuid
+  ip               String?
+  userAgent        String?
+  createdAt        DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// ─── Clients, projects and contracts ─────────────────────────────────────────
+
+model Client {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  name           String          @unique
+  gstin          String?
+  billingAddress String?
+  projects       Project[]
+  purchaseOrders PurchaseOrder[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  createdById    String?         @db.Uuid
+}
+
+model Project {
+  id             String           @id @default(uuid(7)) @db.Uuid
+  code           String           @unique
+  name           String
+  clientId       String           @db.Uuid
+  client         Client           @relation(fields: [clientId], references: [id])
+  status         ProjectStatus    @default(ACTIVE)
+  startDate      DateTime?        @db.Date
+  endDate        DateTime?        @db.Date
+  managers       ProjectManager[]
+  sows           Sow[]
+  quotes         Quote[]
+  purchaseOrders PurchaseOrder[]
+  assignments    Assignment[]
+  documents      Document[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  createdById    String?          @db.Uuid
+
+  @@index([clientId])
+}
+
+/// A project can have several managers. Alerts fall back to the PO admin if there are none.
+model ProjectManager {
+  projectId   String   @db.Uuid
+  employeeId  String   @db.Uuid
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  employee    Employee @relation(fields: [employeeId], references: [id])
+  isPrimary   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  createdById String?  @db.Uuid
+
+  @@id([projectId, employeeId])
+}
+
+model Sow {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  sowNumber      String
+  title          String
+  projectId      String          @db.Uuid
+  project        Project         @relation(fields: [projectId], references: [id])
+  effectiveDate  DateTime        @db.Date
+  expiryDate     DateTime?       @db.Date
+  valueExGst     Decimal?        @db.Decimal(14, 2)
+  status         SowStatus       @default(ACTIVE)
+  fileId         String?         @db.Uuid
+  file           File?           @relation(fields: [fileId], references: [id])
+  quotes         Quote[]
+  purchaseOrders PurchaseOrder[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  createdById    String?         @db.Uuid
+
+  @@unique([projectId, sowNumber])
+}
+
+model Quote {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  quoteNumber    String
+  projectId      String          @db.Uuid
+  project        Project         @relation(fields: [projectId], references: [id])
+  sowId          String?         @db.Uuid
+  sow            Sow?            @relation(fields: [sowId], references: [id])
+  quoteDate      DateTime        @db.Date
+  amountExGst    Decimal         @db.Decimal(14, 2)
+  gstRate        Decimal         @db.Decimal(5, 2)
+  notes          String?
+  status         QuoteStatus     @default(PENDING)
+  fileId         String?         @db.Uuid
+  file           File?           @relation(fields: [fileId], references: [id])
+  purchaseOrders PurchaseOrder[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  createdById    String?         @db.Uuid
+
+  @@unique([projectId, quoteNumber])
+}
+
+/// Status is one of ACTIVE/RENEWED/EXHAUSTED/EXPIRED/CLOSED. "Expiring soon" and
+/// "running low" are computed daily as warning flags, not stored as statuses.
+/// Remaining balance = amountExGst − issued invoices + credit notes (cancelled ignored).
+model PurchaseOrder {
+  id                  String             @id @default(uuid(7)) @db.Uuid
+  poNumber            String
+  clientId            String             @db.Uuid
+  client              Client             @relation(fields: [clientId], references: [id])
+  projectId           String             @db.Uuid
+  project             Project            @relation(fields: [projectId], references: [id])
+  sowId               String?            @db.Uuid
+  sow                 Sow?               @relation(fields: [sowId], references: [id])
+  quoteId             String?            @db.Uuid
+  quote               Quote?             @relation(fields: [quoteId], references: [id])
+  requesterName       String
+  startDate           DateTime           @db.Date
+  endDate             DateTime           @db.Date
+  originalAmountExGst Decimal            @db.Decimal(14, 2)
+  amountExGst         Decimal            @db.Decimal(14, 2)
+  gstType             GstType
+  gstRate             Decimal            @db.Decimal(5, 2)
+  amountInclGst       Decimal            @db.Decimal(14, 2)
+  billingAddress      String
+  /// 2-digit GST state code of the billing address. GST type is pre-filled from it vs the company's state.
+  billingState        String?            @db.VarChar(2)
+  shippingAddress     String
+  notes               String?
+  status              PoStatus           @default(ACTIVE)
+  previousPoId        String?            @unique @db.Uuid
+  previousPo          PurchaseOrder?     @relation("PoRenewal", fields: [previousPoId], references: [id])
+  nextPo              PurchaseOrder?     @relation("PoRenewal")
+  closedReason        String?
+  closedAt            DateTime?
+  fileId              String?            @db.Uuid
+  file                File?              @relation(fields: [fileId], references: [id])
+  /// Optimistic lock: a save with a stale version is rejected with "this PO was changed, reload".
+  version             Int                @default(1)
+  amendments          PoAmendment[]
+  comments            PoComment[]
+  invoices            Invoice[]
+  milestones          BillingMilestone[]
+  assignments         Assignment[]
+  proformas           ProformaInvoice[]
+  documents           Document[]
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  createdById         String?            @db.Uuid
+
+  @@unique([clientId, poNumber])
+  @@index([projectId])
+  @@index([status, endDate])
+}
+
+/// Every change to a PO's amount or dates is recorded here, never overwritten silently.
+model PoAmendment {
+  id              String          @id @default(uuid(7)) @db.Uuid
+  poId            String          @db.Uuid
+  po              PurchaseOrder   @relation(fields: [poId], references: [id])
+  field           String
+  oldValue        String
+  newValue        String
+  reason          String
+  effectiveDate   DateTime?       @db.Date
+  status          AmendmentStatus @default(PENDING)
+  approvedById    String?         @db.Uuid
+  approvedAt      DateTime?
+  rejectionReason String?
+  /// Supporting document, e.g. the client's amendment letter.
+  fileId          String?         @db.Uuid
+  file            File?           @relation(fields: [fileId], references: [id])
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  createdById     String?         @db.Uuid
+
+  @@index([poId])
+}
+
+model PoComment {
+  id          String        @id @default(uuid(7)) @db.Uuid
+  poId        String        @db.Uuid
+  po          PurchaseOrder @relation(fields: [poId], references: [id])
+  body        String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  createdById String?       @db.Uuid
+
+  @@index([poId])
+}
+
+// ─── Billing ─────────────────────────────────────────────────────────────────
+
+model Invoice {
+  id             String             @id @default(uuid(7)) @db.Uuid
+  invoiceNumber  String             @unique
+  poId           String             @db.Uuid
+  po             PurchaseOrder      @relation(fields: [poId], references: [id])
+  type           InvoiceType        @default(INVOICE)
+  status         InvoiceStatus      @default(ISSUED)
+  /// First day of the billed month.
+  billingMonth   DateTime           @db.Date
+  periodStart    DateTime?          @db.Date
+  periodEnd      DateTime?          @db.Date
+  invoiceDate    DateTime           @db.Date
+  dueDate        DateTime?          @db.Date
+  amountExGst    Decimal            @db.Decimal(14, 2)
+  gstRate        Decimal            @db.Decimal(5, 2)
+  gstAmount      Decimal            @db.Decimal(14, 2)
+  amountInclGst  Decimal            @db.Decimal(14, 2)
+  notes          String?
+  /// Required when the invoice exceeds the remaining balance or falls outside the PO period.
+  overrideReason String?
+  paidAt         DateTime?          @db.Date
+  paidById       String?            @db.Uuid
+  cancelledAt    DateTime?
+  cancelReason   String?
+  fileId         String?            @db.Uuid
+  file           File?              @relation(fields: [fileId], references: [id])
+  lines          InvoiceLine[]
+  milestones     BillingMilestone[]
+  proformas      ProformaInvoice[]
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  createdById    String?            @db.Uuid
+
+  @@index([poId, status])
+}
+
+/// Per-employee contribution to an invoice (prorated by days worked and allocation).
+model InvoiceLine {
+  id                String      @id @default(uuid(7)) @db.Uuid
+  invoiceId         String      @db.Uuid
+  invoice           Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  employeeId        String      @db.Uuid
+  employee          Employee    @relation(fields: [employeeId], references: [id])
+  assignmentId      String?     @db.Uuid
+  assignment        Assignment? @relation(fields: [assignmentId], references: [id])
+  monthlyRate       Decimal     @db.Decimal(14, 2)
+  allocationPercent Decimal     @default(100) @db.Decimal(5, 2)
+  eligibleDays      Decimal     @db.Decimal(5, 2)
+  daysInMonth       Int
+  calculatedAmount  Decimal     @db.Decimal(14, 2)
+  attributedAmount  Decimal     @db.Decimal(14, 2)
+  overrideReason    String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  createdById       String?     @db.Uuid
+
+  @@index([invoiceId])
+  @@index([employeeId])
+}
+
+model BillingMilestone {
+  id          String          @id @default(uuid(7)) @db.Uuid
+  poId        String          @db.Uuid
+  po          PurchaseOrder   @relation(fields: [poId], references: [id])
+  title       String
+  dueDate     DateTime        @db.Date
+  amountExGst Decimal?        @db.Decimal(14, 2)
+  status      MilestoneStatus @default(PENDING)
+  invoiceId   String?         @db.Uuid
+  invoice     Invoice?        @relation(fields: [invoiceId], references: [id])
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  createdById String?         @db.Uuid
+
+  @@index([poId])
+  @@index([status, dueDate])
+}
+
+model ProformaInvoice {
+  id                 String             @id @default(uuid(7)) @db.Uuid
+  proformaNumber     String             @unique
+  poId               String             @db.Uuid
+  po                 PurchaseOrder      @relation(fields: [poId], references: [id])
+  employeeId         String?            @db.Uuid
+  employee           Employee?          @relation(fields: [employeeId], references: [id])
+  billingMonth       DateTime           @db.Date
+  periodStart        DateTime           @db.Date
+  periodEnd          DateTime           @db.Date
+  billableDaysMethod BillableDaysMethod @default(CALENDAR)
+  billableDays       Decimal?           @db.Decimal(5, 2)
+  amountExGst        Decimal            @db.Decimal(14, 2)
+  gstRate            Decimal            @db.Decimal(5, 2)
+  gstAmount          Decimal            @db.Decimal(14, 2)
+  amountInclGst      Decimal            @db.Decimal(14, 2)
+  status             ProformaStatus     @default(DRAFT)
+  version            Int                @default(1)
+  /// [{ description, quantity, rate, amount, hsnSac }]; amounts as strings.
+  lineItems          Json
+  /// Snapshots of earlier versions: [{ version, updatedAt, updatedById, amounts, notes }].
+  history            Json               @default("[]")
+  notes              String?
+  recipientEmail     String?
+  sentAt             DateTime?
+  invoiceId          String?            @db.Uuid
+  invoice            Invoice?           @relation(fields: [invoiceId], references: [id])
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  createdById        String?            @db.Uuid
+
+  @@index([poId])
+}
+
+// ─── Assignments ─────────────────────────────────────────────────────────────
+
+/// Headcount is the count of rows active today. Assignments for one employee on the
+/// same project must not overlap in dates (enforced in the assignments service).
+/// poId is optional: people can start before the PO arrives, or work on internal projects.
+/// Assignments without a PO are flagged as unbilled on the dashboard and in the daily alerts.
+model Assignment {
+  id                  String             @id @default(uuid(7)) @db.Uuid
+  poId                String?            @db.Uuid
+  po                  PurchaseOrder?     @relation(fields: [poId], references: [id])
+  projectId           String             @db.Uuid
+  project             Project            @relation(fields: [projectId], references: [id])
+  employeeId          String             @db.Uuid
+  employee            Employee           @relation(fields: [employeeId], references: [id])
+  fromDate            DateTime           @db.Date
+  toDate              DateTime?          @db.Date
+  allocationPercent   Decimal            @default(100) @db.Decimal(5, 2)
+  billingRatePerMonth Decimal?           @db.Decimal(14, 2)
+  billableDaysMethod  BillableDaysMethod @default(CALENDAR)
+  manualBillableDays  Decimal?           @db.Decimal(5, 2)
+  endedReason         String?
+  onHold              Boolean            @default(false)
+  notes               String?
+  replacedById        String?            @unique @db.Uuid
+  replacedBy          Assignment?        @relation("AssignmentReplacement", fields: [replacedById], references: [id])
+  replaces            Assignment?        @relation("AssignmentReplacement")
+  invoiceLines        InvoiceLine[]
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  createdById         String?            @db.Uuid
+
+  @@index([poId])
+  @@index([employeeId, fromDate])
+  @@index([projectId])
+}
+
+// ─── Employees (basic for Phase 1; full master record in Phase 3) ───────────
+
+model Employee {
+  id                String             @id @default(uuid(7)) @db.Uuid
+  empCode           String             @unique
+  fullName          String
+  email             String?            @unique
+  phone             String?
+  designation       String?
+  department        String?
+  location          String?
+  skills            String[]
+  status            EmployeeStatus     @default(ACTIVE)
+  pipelineStage     PipelineStage?
+  doj               DateTime?          @db.Date
+  managerId         String?            @db.Uuid
+  manager           Employee?          @relation("EmployeeManager", fields: [managerId], references: [id])
+  reports           Employee[]         @relation("EmployeeManager")
+  user              User?
+  sensitiveIds      SensitiveId[]
+  employmentPeriods EmploymentPeriod[]
+  managedProjects   ProjectManager[]
+  assignments       Assignment[]
+  invoiceLines      InvoiceLine[]
+  proformas         ProformaInvoice[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  createdById       String?            @db.Uuid
+
+  @@index([managerId])
+  @@index([status])
+}
+
+/// A rehire adds a new period to the same employee, so history stays together.
+model EmploymentPeriod {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  employeeId        String    @db.Uuid
+  employee          Employee  @relation(fields: [employeeId], references: [id])
+  joinDate          DateTime  @db.Date
+  lastWorkingDate   DateTime? @db.Date
+  resignationReason String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  createdById       String?   @db.Uuid
+
+  @@index([employeeId])
+}
+
+/// PAN and Aadhaar, encrypted per field with AES-256-GCM. Screens only ever see last4.
+/// lookupHash is an HMAC of the normalised number, used for uniqueness and rehire matching.
+model SensitiveId {
+  id          String          @id @default(uuid(7)) @db.Uuid
+  employeeId  String          @db.Uuid
+  employee    Employee        @relation(fields: [employeeId], references: [id])
+  kind        SensitiveIdKind
+  ciphertext  Bytes
+  last4       String
+  lookupHash  String
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  createdById String?         @db.Uuid
+
+  @@unique([employeeId, kind])
+  @@unique([kind, lookupHash])
+}
+
+// ─── Files, audit, notifications, settings ──────────────────────────────────
+
+/// Bytes live in Cloudinary (private, signed URLs only); storageKey is the Cloudinary public_id.
+/// A file can't be downloaded until scanStatus is CLEAN.
+model File {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  storageKey     String          @unique
+  originalName   String
+  mimeType       String
+  sizeBytes      Int
+  sha256         String?
+  scanStatus     FileScanStatus  @default(PENDING)
+  deletedAt      DateTime?
+  sows           Sow[]
+  quotes         Quote[]
+  purchaseOrders PurchaseOrder[]
+  invoices       Invoice[]
+  amendments     PoAmendment[]
+  documents      Document[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  createdById    String?         @db.Uuid
+}
+
+/// Documents uploaded on the Documents screen. SOW, quote, PO and invoice files are linked from
+/// their own records; this table holds everything else. Documents are archived, never deleted.
+model Document {
+  id           String         @id @default(uuid(7)) @db.Uuid
+  fileId       String         @db.Uuid
+  file         File           @relation(fields: [fileId], references: [id])
+  type         DocumentType
+  title        String
+  projectId    String?        @db.Uuid
+  project      Project?       @relation(fields: [projectId], references: [id])
+  poId         String?        @db.Uuid
+  po           PurchaseOrder? @relation(fields: [poId], references: [id])
+  expiryDate   DateTime?      @db.Date
+  notes        String?
+  status       DocumentStatus @default(ACTIVE)
+  archivedAt   DateTime?
+  archivedById String?        @db.Uuid
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  createdById  String?        @db.Uuid
+
+  @@index([projectId])
+  @@index([poId])
+  @@index([type, status])
+}
+
+/// One row per email the worker handles, so admins can see what was sent and what failed.
+model EmailLog {
+  id             String      @id @default(uuid(7)) @db.Uuid
+  to             String
+  template       String
+  subject        String?
+  status         EmailStatus @default(QUEUED)
+  /// Same key → same email; a retried job never sends twice.
+  dedupeKey      String?     @unique
+  brevoMessageId String?
+  attempts       Int         @default(0)
+  error          String?
+  sentAt         DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([status, createdAt])
+}
+
+/// Gap-free numbering. Incremented with UPDATE ... RETURNING inside the transaction that
+/// creates the invoice, so a rollback also rolls back the number.
+model NumberCounter {
+  series        NumberSeries
+  /// Indian financial year, e.g. "2026-27".
+  financialYear String
+  lastNumber    Int          @default(0)
+  updatedAt     DateTime     @updatedAt
+
+  @@id([series, financialYear])
+}
+
+/// Replays the first response when a client retries a create with the same Idempotency-Key.
+model IdempotencyKey {
+  key            String   @id
+  userId         String   @db.Uuid
+  requestHash    String
+  responseStatus Int
+  responseBody   Json
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+/// Append-only. The app's database role gets INSERT and SELECT only (see migration notes).
+model AuditLog {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  entityType String
+  entityId   String   @db.Uuid
+  action     String
+  before     Json?
+  after      Json?
+  reason     String?
+  actorId    String?  @db.Uuid
+  actorIp    String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([createdAt])
+}
+
+/// dedupeKey (e.g. "po-expiry:PO123:2026-W39") makes retried jobs idempotent.
+model Notification {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  userId    String    @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String
+  link      String?
+  dedupeKey String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, readAt])
+}
+
+/// Admin-editable settings such as alert thresholds and recipient lists.
+model Setting {
+  key         String   @id
+  value       Json
+  updatedAt   DateTime @updatedAt
+  updatedById String?  @db.Uuid
+}

@@ -1,0 +1,88 @@
+name: Deploy web
+
+# Publishes apps/web to Vercel (production) with the Vercel CLI, so Vercel never has to connect to this
+# organization's repo. Only main deploys: dev and staging run the tests in ci.yml and nothing else.
+# It does nothing until the three Vercel secrets exist (see "One-time setup" in docs/deploy-web.md).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web/**'
+      - 'packages/shared/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/deploy-web.yml'
+  workflow_dispatch:
+
+# A newer push to the same branch replaces a deploy that is still running.
+concurrency:
+  group: deploy-web-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+  VERCEL_CLI_VERSION: 64.5.0
+
+jobs:
+  deploy:
+    # Also guards the manual "Run workflow" button, which lets you pick any branch.
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the Vercel secrets exist
+        id: secrets
+        env:
+          TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "::warning::Vercel secrets are not set, so nothing was deployed. Add VERCEL_TOKEN, VERCEL_ORG_ID and VERCEL_PROJECT_ID in Settings > Secrets and variables > Actions."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.secrets.outputs.ready == 'true'
+
+      # The site must not go live with the placeholder, or every API call from it would fail.
+      - name: Check the API address in vercel.json
+        if: steps.secrets.outputs.ready == 'true'
+        run: |
+          if grep -q "REPLACE-WITH" apps/web/vercel.json; then
+            echo "::error file=apps/web/vercel.json::The /api rewrite still has the REPLACE-WITH placeholder. Put the real API address there before deploying."
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+        if: steps.secrets.outputs.ready == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.secrets.outputs.ready == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install the Vercel CLI
+        if: steps.secrets.outputs.ready == 'true'
+        run: npm install --global vercel@${{ env.VERCEL_CLI_VERSION }}
+
+      - name: Pull the Vercel project settings
+        if: steps.secrets.outputs.ready == 'true'
+        run: vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+
+      - name: Build
+        if: steps.secrets.outputs.ready == 'true'
+        run: vercel build --prod --token="${{ secrets.VERCEL_TOKEN }}"
+
+      - name: Deploy
+        if: steps.secrets.outputs.ready == 'true'
+        id: deploy
+        run: |
+          url=$(vercel deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "### Deployed to production" >> "$GITHUB_STEP_SUMMARY"
+          echo "$url" >> "$GITHUB_STEP_SUMMARY"

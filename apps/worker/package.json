@@ -1,0 +1,26 @@
+{
+  "name": "@primestar/worker",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch --env-file-if-exists=.env --conditions=@primestar/source src/main.ts",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@primestar/db": "workspace:*",
+    "@primestar/mail": "workspace:*",
+    "@primestar/shared": "workspace:*",
+    "pg-boss": "^10.1.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "~5.9.0",
+    "vitest": "^5.0.4"
+  }
+}

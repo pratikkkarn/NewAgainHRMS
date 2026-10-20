@@ -1,0 +1,6 @@
+{
+  "name": "Prime Star HRMS",
+  "description": "Enterprise HRMS & Purchase Order Management System for Prime Star Consulting Services",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

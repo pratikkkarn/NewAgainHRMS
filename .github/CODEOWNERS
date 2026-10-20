@@ -1,0 +1,27 @@
+# Reviewers are requested automatically for the folders each person owns.
+# The last matching rule wins. Replace the placeholders with real GitHub usernames:
+#   @VINOD_GITHUB   backend and database
+#   @ANURAG_GITHUB  project manager
+
+*                     @Ruchitha1608
+
+# Frontend: Pratik
+/apps/web/            @pratikkkarn
+
+# Backend and database: Vinod
+/apps/api/            @VINOD_GITHUB
+/packages/db/         @VINOD_GITHUB
+
+# Automation, jobs, email, PDFs, AI, CI/CD and deployment: Ruchitha
+/apps/worker/         @Ruchitha1608
+/packages/mail/        @Ruchitha1608
+/.github/             @Ruchitha1608
+/docker-compose.yml   @Ruchitha1608
+/apps/web/vercel.json @Ruchitha1608
+
+# Contracts between areas need the owners on both sides
+/packages/shared/                @VINOD_GITHUB @pratikkkarn
+/packages/shared/src/jobs.ts     @VINOD_GITHUB @Ruchitha1608
+
+# Requirements and decisions
+/docs/                @ANURAG_GITHUB

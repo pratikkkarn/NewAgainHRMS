@@ -1,0 +1,108 @@
+@import "@fontsource-variable/inter";
+@import "tailwindcss";
+
+/* ─── DESIGN TOKENS ─────────────────────────────────────────── */
+@theme {
+  /* One typeface everywhere: Inter, self-hosted (no third-party font requests). */
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Numbers and reference codes (PO numbers, amounts) use the same sans with
+     tabular figures, instead of a code font. Existing `font-mono` classes pick this up. */
+  --font-mono: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+
+  /* Desktop-first type scale: body copy at 13px instead of 12px. */
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.25rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.375rem;
+
+  /* Chart palette (validated): ordinal blues for invoiced / remaining. */
+  --color-chart-1: #2a78d6;
+  --color-chart-1-light: #86b6ef;
+  --color-chart-grid: #e8ecf1;
+
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.03);
+  --shadow-card-hover: 0 4px 12px rgb(15 23 42 / 0.06), 0 1px 3px rgb(15 23 42 / 0.04);
+}
+
+/* ─── BASE ──────────────────────────────────────────────────── */
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    /* Inter: open 4/6/9 and single-storey "a" read cleaner in dense tables */
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    background-color: #f5f7fa;
+    color: var(--color-slate-900);
+  }
+
+  ::selection {
+    background-color: rgb(79 70 229 / 0.18);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-indigo-500);
+    outline-offset: 2px;
+  }
+
+  /* ─── TABLES ───────────────────────────────────────────────
+     Every data table in the app shares one look: quiet uppercase
+     headers, comfortable rows, aligned figures, a soft row hover. */
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+
+  thead th {
+    font-size: 11px;
+    line-height: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--color-slate-500);
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+
+  tbody td {
+    vertical-align: middle;
+  }
+
+  tbody tr {
+    transition: background-color 120ms ease;
+  }
+
+  tbody tr:hover {
+    background-color: rgb(248 250 252);
+  }
+
+  /* Slim scrollbars for scrolling panels and wide tables */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-slate-300) transparent;
+  }
+}
+
+/* Tabular figures wherever the old code font was used, so digits line up in columns. */
+.font-mono {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+}
+
+/* Large standalone numbers read better with proportional figures. */
+.figure {
+  font-variant-numeric: proportional-nums;
+  letter-spacing: -0.02em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

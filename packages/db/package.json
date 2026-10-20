@@ -1,0 +1,41 @@
+{
+  "name": "@primestar/db",
+  "version": "0.0.0",
+  "private": true,
+  "exports": {
+    ".": {
+      "@primestar/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "echo \"no tests yet\"",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "prisma db seed"
+  },
+  "prisma": {
+    "seed": "tsx --conditions=@primestar/source prisma/seed.ts"
+  },
+  "dependencies": {
+    "@primestar/shared": "*",
+    "@prisma/client": "^6.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "argon2": "^0.45.1",
+    "prisma": "^6.16.0",
+    "tsx": "^4.20.0",
+    "typescript": "~5.9.0"
+  }
+}
